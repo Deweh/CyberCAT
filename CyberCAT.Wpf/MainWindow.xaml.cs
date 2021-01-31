@@ -23,6 +23,7 @@ using CyberCAT.Core.Classes.NodeRepresentations;
 using CyberCAT.Core.Classes.Interfaces;
 using System.Windows.Forms;
 using CyberCAT.Core;
+using CyberCAT.Core.Classes.Mapping;
 using CyberCAT.Wpf.Classes;
 
 namespace CyberCAT.Wpf
@@ -34,7 +35,10 @@ namespace CyberCAT.Wpf
     {
         private SaveFile LoadedSaveFile { get; set; }
         private System.Windows.Forms.PropertyGrid _propertyGrid;
-        private const string NAMES_FILE_NAME = "Names.json";
+        private const string GAMEDATA_FILE_NAME = "gamedata.db";
+        private const string SETTINGS_FILE_NAME = "Settings.json";
+        private Settings _settings;
+
         public MainWindow()
         {
             InitializeComponent();
@@ -45,15 +49,22 @@ namespace CyberCAT.Wpf
             System.Windows.Forms.Integration.WindowsFormsHost host = new System.Windows.Forms.Integration.WindowsFormsHost();
             host.Child = _propertyGrid;
             
-            
-
-
             propertyGridHost.Children.Add(host);
-            if (File.Exists(NAMES_FILE_NAME))
+            if (File.Exists(GAMEDATA_FILE_NAME))
             {
-                NameResolver.UseDictionary(JsonConvert.DeserializeObject<Dictionary<ulong, NameResolver.NameStruct>>(File.ReadAllText(NAMES_FILE_NAME)));
+                NameResolver.TweakDbResolver = new SqliteResolver(GAMEDATA_FILE_NAME);
+            }
+
+            if (File.Exists(SETTINGS_FILE_NAME))
+            {
+                _settings = JsonConvert.DeserializeObject<Settings>(File.ReadAllText(SETTINGS_FILE_NAME)) ?? Settings.Default;
+            }
+            else
+            {
+                _settings = Settings.Default;
             }
         }
+
         private void ApplyStyleToPropertyGrid()
         {
             var mergedDictionaries = ThemeManager.Current.DetectTheme(System.Windows.Application.Current).Resources.MergedDictionaries[0].MergedDictionaries[0];
@@ -80,6 +91,7 @@ namespace CyberCAT.Wpf
             _propertyGrid.CategoryForeColor = textColor;
             _propertyGrid.ViewForeColor = textColor;
         }
+
         private void AddTypeDescriptorAttributes()
         {
             TypeDescriptor.AddAttributes(typeof(CharacterCustomizationAppearances.AppearanceSection), new TypeConverterAttribute(typeof(ExpandableObjectConverter)));
@@ -99,6 +111,14 @@ namespace CyberCAT.Wpf
             TypeDescriptor.AddAttributes(typeof(GenericUnknownStruct.BaseClassEntry), new TypeConverterAttribute(typeof(ExpandableObjectConverter)));
             TypeDescriptor.AddAttributes(typeof(IHandle), new TypeConverterAttribute(typeof(ExpandableObjectConverter)));
             TypeDescriptor.AddAttributes(typeof(List<NodeRepresentation>), new TypeConverterAttribute(typeof(ExpandableObjectConverter)));
+        }
+
+        private void OnSettingsClick(object sender, RoutedEventArgs e)
+        {
+            var settings = new SettingsWindow(_settings) {Owner = this};
+            settings.ShowDialog();
+            _settings = settings.NewSettings;
+            File.WriteAllText(SETTINGS_FILE_NAME, JsonConvert.SerializeObject(_settings, Formatting.Indented));
         }
 
         private static string OpenSaveFileDialog(bool startInSaveFolder)
@@ -165,21 +185,21 @@ namespace CyberCAT.Wpf
             });
         }
 
-        private void OpenPcOnClick(object sender, RoutedEventArgs e)
+        private async void OpenPcOnClick(object sender, RoutedEventArgs e)
         {
-            var fileName = OpenSaveFileDialog(true); // FIXME: get from settings
+            var fileName = OpenSaveFileDialog(_settings.StartInSavesFolder);
             if (fileName == null)
             {
                 return;
             }
 
-            Task.Run(() =>
+            await Task.Run(() =>
             {
                 LoadFile(fileName);
             });
         }
 
-        private void OpenPs4OnClick(object sender, RoutedEventArgs e)
+        private async void OpenPs4OnClick(object sender, RoutedEventArgs e)
         {
             var fileName = OpenSaveFileDialog(false);
             if (fileName == null)
@@ -187,7 +207,7 @@ namespace CyberCAT.Wpf
                 return;
             }
 
-            Task.Run(() =>
+            await Task.Run(() =>
             {
                 LoadFile(fileName);
             });
@@ -196,7 +216,7 @@ namespace CyberCAT.Wpf
         private void LoadFile(string fileName)
         {
             ShowProgressIndicator();
-            var newSaveFile = new SaveFile();
+            var newSaveFile = new SaveFile(_settings.EnabledParsers);
             try
             {
                 var bytes = File.ReadAllBytes(fileName);
@@ -219,12 +239,13 @@ namespace CyberCAT.Wpf
             Footer.Dispatcher.InvokeAsync(() => Footer.Text = $"{LoadedSaveFile.Header} - {fileName}");
 
             InitializeEditors();
+
             ShowOpenedFile();
         }
 
         private void SavePcOnClick(object sender, RoutedEventArgs e)
         {
-            var fileName = SaveSaveFileDialog(true); // FIXME: get from settings
+            var fileName = SaveSaveFileDialog(_settings.StartInSavesFolder);
 
             if (fileName != null)
             {
@@ -234,7 +255,7 @@ namespace CyberCAT.Wpf
 
         private void SavePs4OnClick(object sender, RoutedEventArgs e)
         {
-            var fileName = SaveSaveFileDialog(true); // FIXME: get from settings
+            var fileName = SaveSaveFileDialog(false);
 
             if (fileName != null)
             {
@@ -247,14 +268,47 @@ namespace CyberCAT.Wpf
             Dispatcher.InvokeAsync(() =>
             {
                 SimpleItemsTab.Content = new InventoryViewer(LoadedSaveFile);
+
                 foreach (var node in LoadedSaveFile.Nodes)
                 {
                     var treeNode = new SaveNodeTreeViewItem(node);
                     BuildVisualSubTree(treeNode, null);
                     advancedTabTreeView.Items.Add(treeNode);
                 }
+
+                LoadQuickActions();
             });
         }
+        private void LoadQuickActions()
+        {
+            quickActionWrapPanel.Children.Clear();
+            foreach (var directory in Directory.GetDirectories("QuickActions"))
+            {
+                var definitionPath = Path.Combine(directory, "definition.json");
+                if (File.Exists(definitionPath))
+                {
+                    var action = JsonConvert.DeserializeObject<QuickAction>(File.ReadAllText(definitionPath));
+                    action.Arguments.Add(new QuickActionArgument() { Name = "Name", Type = "Type" });
+                    File.WriteAllText("out.json",JsonConvert.SerializeObject(action, Formatting.Indented));
+                    var tile = new ScriptTile(action, LoadedSaveFile, directory);
+                    tile.Click += Tile_Click;
+                    quickActionWrapPanel.Children.Add(tile);
+                }
+            }
+        }
+
+        private void Tile_Click(object sender, RoutedEventArgs e)
+        {
+            if (_settings.AllowQuickActions)
+            {
+                ((ScriptTile)sender).RunScript(_settings.EnableQuickActionDebugging,_settings.QuickActionDebuggingPort);
+            }
+            else
+            {
+                System.Windows.MessageBox.Show("Please note that running QuickActions from untrusted sources may damage your system or files. If you are ok with that risk or trust all installed QuickActions check \"Allow QuickQctions\" in Settings Window");
+            }
+        }
+
         private void BuildVisualSubTree(SaveNodeTreeViewItem treeNode, string filter)
         {
             if (treeNode.Node.Value is Inventory inv)
