@@ -20,6 +20,16 @@ namespace CyberCAT.Core.Classes.Parsers
         private object _handlesLock = new object();
         private List<IHandle> _handles;
         private List<string> _stringList;
+        private readonly HashSet<DefaultValueOverrideEntry> _defaultValueOverride = new HashSet<DefaultValueOverrideEntry>();
+
+        public static event EventHandler<WrongDefaultValueEventArgs> WrongDefaultValue;
+
+        internal static bool OnWrongDefaultValue(WrongDefaultValueEventArgs e)
+        {
+            WrongDefaultValue?.Invoke(null, e);
+
+            return e.Ignore;
+        }
 
         public object Read(NodeEntry node, BinaryReader reader, List<INodeParser> parsers)
         {
@@ -87,8 +97,7 @@ namespace CyberCAT.Core.Classes.Parsers
                     foreach (var pair in stringInfoList)
                     {
                         Debug.Assert(br.BaseStream.Position == stringIndexListPosition + pair.Key);
-                        _stringList.Add(br.ReadString(pair.Value - 1));
-                        br.Skip(1); // null terminator
+                        _stringList.Add(br.ReadNullTerminatedString());
                     }
 
                     // start of dataIndexList
@@ -346,7 +355,12 @@ namespace CyberCAT.Core.Classes.Parsers
                 if (attrName != null && attrName == propertyName)
                 {
                     if (MappingHelper.GetPropertyHelper(prop).IsDefault(value))
-                        throw new WrongDefaultValueException(cls.GetType().Name, propertyName, value);
+                    {
+                        var ignore = OnWrongDefaultValue(new WrongDefaultValueEventArgs(cls.GetType().Name, propertyName, value));
+                        if (!ignore)
+                            throw new WrongDefaultValueException(cls.GetType().Name, propertyName, value);
+                        _defaultValueOverride.Add(new DefaultValueOverrideEntry(cls, prop));
+                    }
 
                     MappingHelper.GetPropertyHelper(prop).Set(cls, value);
                     return;
@@ -607,13 +621,31 @@ namespace CyberCAT.Core.Classes.Parsers
 
                     var pos = writer.BaseStream.Position;
 
-                    _stringList = GenerateStringList(classList);
+                    var stringList = new string[classList.Length][];
+                    Parallel.For(0, classList.Length, (index, state) =>
+                    {
+                        stringList[index] = GenerateStringList(classList[index]);
+                    });
+
+                    var tmpSringList = new HashSet<string>();
+                    foreach (var strings in stringList)
+                    {
+                        foreach (var str in strings)
+                        {
+                            tmpSringList.Add(str);
+                        }
+                    }
+
+                    _stringList = tmpSringList.ToList();
+                    //_stringList = GenerateStringList(classList);
 
                     var offset = _stringList.Count * 4;
                     foreach (var str in _stringList)
                     {
                         writer.WriteInt24(offset);
-                        writer.Write((byte)(str.Length + 1));
+                        // yeah, only write the first byte of the length, like CDPR did...
+                        var length = BitConverter.GetBytes(str.Length + 1);
+                        writer.Write(length[0]);
                         offset += (short)(str.Length + 1);
                     }
 
@@ -693,25 +725,22 @@ namespace CyberCAT.Core.Classes.Parsers
             GC.Collect();
         }
 
-        private List<string> GenerateStringList(GenericUnknownStruct.BaseClassEntry[] classes)
+        private string[] GenerateStringList(GenericUnknownStruct.BaseClassEntry cls)
         {
             var result = new HashSet<string>();
 
-            foreach (var classEntry in classes)
+            if (_doMapping)
             {
-                if (_doMapping)
-                {
-                    result.Add(GetRealName(classEntry.GetType()));
-                    GenerateStringListFromMappedFields(classEntry, ref result);
-                }
-                else
-                {
-                    result.Add(((GenericUnknownStruct.ClassEntry)classEntry).Name);
-                    GenerateStringListFromUnmappedFields(((GenericUnknownStruct.ClassEntry)classEntry).Fields, ref result);
-                }
+                result.Add(GetRealName(cls.GetType()));
+                GenerateStringListFromMappedFields(cls, ref result);
+            }
+            else
+            {
+                result.Add(((GenericUnknownStruct.ClassEntry)cls).Name);
+                GenerateStringListFromUnmappedFields(((GenericUnknownStruct.ClassEntry)cls).Fields, ref result);
             }
 
-            return result.ToList();
+            return result.ToArray();
         }
 
         private void WriteValue(BinaryWriter writer, object value)
@@ -893,10 +922,13 @@ namespace CyberCAT.Core.Classes.Parsers
             return GetTypeStringFromType(propInfo.PropertyType);
         }
 
-        private bool CanBeIgnored(PropertyInfo propInfo, object propValue)
+        private bool CanBeIgnored(GenericUnknownStruct.BaseClassEntry cls, PropertyInfo propInfo, object propValue)
         {
             if (MappingHelper.IgnoredCache.Contains(propInfo))
                 return true;
+
+            if (_defaultValueOverride.Contains(new DefaultValueOverrideEntry(cls, propInfo)))
+                return false;
 
             return MappingHelper.GetPropertyHelper(propInfo).IsDefault(propValue);
         }
@@ -939,7 +971,7 @@ namespace CyberCAT.Core.Classes.Parsers
             foreach (var prop in cls.GetType().GetProperties())
             {
                 var propValue = MappingHelper.GetPropertyHelper(prop).Get(cls);
-                if (CanBeIgnored(prop, propValue))
+                if (CanBeIgnored(cls, prop, propValue))
                     continue;
 
                 props.Add(new KeyValuePair<PropertyInfo, object>(prop, propValue));
@@ -1009,7 +1041,7 @@ namespace CyberCAT.Core.Classes.Parsers
                     foreach (var prop in cls.GetType().GetProperties())
                     {
                         var propValue = MappingHelper.GetPropertyHelper(prop).Get(cls);
-                        if (CanBeIgnored(prop, propValue))
+                        if (CanBeIgnored(cls, prop, propValue))
                             continue;
 
                         props.Add(new KeyValuePair<PropertyInfo, object>(prop, propValue));
@@ -1198,6 +1230,35 @@ namespace CyberCAT.Core.Classes.Parsers
             public string Name { get; set; }
             public string Type { get; set; }
             public uint Offset { get; set; }
+        }
+
+        private class DefaultValueOverrideEntry
+        {
+            public GenericUnknownStruct.BaseClassEntry Class { get; set; }
+            public PropertyInfo PropertyInfo { get; set; }
+
+            public DefaultValueOverrideEntry(GenericUnknownStruct.BaseClassEntry cls, PropertyInfo propertyInfo)
+            {
+                Class = cls;
+                PropertyInfo = propertyInfo;
+            }
+
+            public override bool Equals(object obj)
+            {
+                var other = obj as DefaultValueOverrideEntry;
+                if (other == null)
+                    return false;
+
+                return this.Class.Equals(other.Class) && this.PropertyInfo.Equals(other.PropertyInfo);
+            }
+
+            public override int GetHashCode()
+            {
+                int hashClass = this.Class.GetHashCode();
+                int hashPropertyInfo = this.PropertyInfo.GetHashCode();
+
+                return hashClass ^ hashPropertyInfo;
+            }
         }
     }
 }
