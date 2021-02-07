@@ -12,6 +12,13 @@ namespace CyberCAT.Core.Classes
 {
     public class SaveFile
     {
+        public static event EventHandler<SaveProgressChangedEventArgs> ProgressChanged;
+
+        public static void ReportProgress(SaveProgressChangedEventArgs e)
+        {
+            ProgressChanged?.Invoke(null, e);
+        }
+
         public class SaveFileHeader
         {
             public byte[] Magic { get; set; }
@@ -199,7 +206,7 @@ namespace CyberCAT.Core.Classes
                 }
                 Nodes.AddRange(FlatNodes.Where(n => !n.IsChild));
                 CalculateTrueSizes(Nodes, (int) stream.Length);
-                ParserUtils.ParseChildren(Nodes, reader, _parsers);
+                ParserUtils.ParseChildren(Nodes, reader, _parsers, true);
             }
         }
 
@@ -247,6 +254,7 @@ namespace CyberCAT.Core.Classes
                 {
                     foreach (var node in Nodes)
                     {
+                        ReportProgress(new SaveProgressChangedEventArgs(0, 0, node.Name));
                         nw.Write(node);
                     }
 
