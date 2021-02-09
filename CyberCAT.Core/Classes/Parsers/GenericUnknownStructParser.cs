@@ -627,7 +627,7 @@ namespace CyberCAT.Core.Classes.Parsers
                     var pos = writer.BaseStream.Position;
 
                     int count = 1;
-                    int max = classList.Length * 2;
+                    int max = classList.Length * 3;
 
                     var stringList = new string[classList.Length][];
                     Parallel.For(0, classList.Length, (index, state) =>
@@ -701,6 +701,8 @@ namespace CyberCAT.Core.Classes.Parsers
                         }
                         writer.Write(classOffset);
                         classOffset += bufferList[i].Length;
+                        count++;
+                        SaveFile.ReportProgress(new SaveProgressChangedEventArgs(count, max));
                     }
 
                     Debug.Assert(writer.BaseStream.Position == dataListOffset + pos);
