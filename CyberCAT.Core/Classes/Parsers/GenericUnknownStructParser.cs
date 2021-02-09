@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using CyberCAT.Core.Classes.Interfaces;
 using CyberCAT.Core.Classes.Mapping;
@@ -146,6 +147,8 @@ namespace CyberCAT.Core.Classes.Parsers
 
                     _handles = new List<IHandle>();
 
+                    int count = 1;
+                    int max = bufferDict.Count;
                     Parallel.ForEach(bufferDict, (pair) =>
                     {
                         using (var ms2 = new MemoryStream(pair.Value))
@@ -162,6 +165,8 @@ namespace CyberCAT.Core.Classes.Parsers
                                 }
                             }
                         }
+                        Interlocked.Increment(ref count);
+                        SaveFile.ReportProgress(new SaveProgressChangedEventArgs(count, max));
                     });
 
                     if (_doMapping) 
@@ -621,10 +626,15 @@ namespace CyberCAT.Core.Classes.Parsers
 
                     var pos = writer.BaseStream.Position;
 
+                    int count = 1;
+                    int max = classList.Length * 2;
+
                     var stringList = new string[classList.Length][];
                     Parallel.For(0, classList.Length, (index, state) =>
                     {
                         stringList[index] = GenerateStringList(classList[index]);
+                        Interlocked.Increment(ref count);
+                        SaveFile.ReportProgress(new SaveProgressChangedEventArgs(count, max));
                     });
 
                     var tmpSringList = new HashSet<string>();
@@ -671,6 +681,8 @@ namespace CyberCAT.Core.Classes.Parsers
                         {
                             bufferList[index] = GenerateDataFromUnmappedFields(((GenericUnknownStruct.ClassEntry)classList[index]).Fields);
                         }
+                        Interlocked.Increment(ref count);
+                        SaveFile.ReportProgress(new SaveProgressChangedEventArgs(count, max));
                     });
 
                     var dataListOffset = writer.BaseStream.Position - pos + (classList.Length * 8);
