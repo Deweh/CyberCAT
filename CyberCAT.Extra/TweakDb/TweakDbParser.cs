@@ -62,7 +62,7 @@ namespace CyberCAT.Extra
             }
         }
 
-        private TweakDBID GetTweakDBID(string str)
+        public TweakDBID GetTweakDBID(string str)
         {
             var buffer1 = new byte[8];
             var buffer2 = HashGenerator.CalcCRC32(str);
