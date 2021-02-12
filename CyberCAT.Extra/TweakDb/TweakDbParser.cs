@@ -75,6 +75,13 @@ namespace CyberCAT.Extra
 
         public void AddStrings(string filePath)
         {
+            _hashMap = GetStrings(filePath);
+        }
+
+        public Dictionary<TweakDBID, string> GetStrings(string filePath, int types = 3)
+        {
+            var tempMap = new Dictionary<TweakDBID, string>();
+
             if (string.IsNullOrEmpty(filePath)) throw new ArgumentNullException(nameof(filePath));
             if (!File.Exists(filePath)) throw new Exception();
 
@@ -89,33 +96,44 @@ namespace CyberCAT.Extra
                     var unk3 = reader.ReadUInt32();
                     var queriesCount = reader.ReadUInt32();
 
-                    // flat
-                    for (int i = 0; i < unk2; i++)
+                    if (types > 0)
                     {
-                        var str = reader.ReadPackedString();
-                        _hashMap.Add(GetTweakDBID(str), str);
+                        // flat
+                        for (int i = 0; i < unk2; i++)
+                        {
+                            var str = reader.ReadPackedString();
+                            tempMap.Add(GetTweakDBID(str), str);
+                        }
                     }
 
-                    // record
-                    for (int i = 0; i < unk3; i++)
+                    if (types > 1)
                     {
-                        var str = reader.ReadPackedString();
-                        _hashMap.Add(GetTweakDBID(str), str);
+                        // record
+                        for (int i = 0; i < unk3; i++)
+                        {
+                            var str = reader.ReadPackedString();
+                            tempMap.Add(GetTweakDBID(str), str);
+                        }
                     }
 
-                    // queries
-                    for (int i = 0; i < queriesCount; i++)
+                    if (types > 2)
                     {
-                        var str = reader.ReadPackedString();
+                        // queries
+                        for (int i = 0; i < queriesCount; i++)
+                        {
+                            var str = reader.ReadPackedString();
 
-                        var tweakDBID = GetTweakDBID(str);
-                        if (_hashMap.ContainsKey(tweakDBID))
-                            continue;
+                            var tweakDBID = GetTweakDBID(str);
+                            if (tempMap.ContainsKey(tweakDBID))
+                                continue;
 
-                        _hashMap.Add(tweakDBID, str);
+                            tempMap.Add(tweakDBID, str);
+                        }
                     }
                 }
             }
+
+            return tempMap;
         }
 
         public void Read(string filePath)
