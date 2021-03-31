@@ -20,6 +20,9 @@ namespace CyberCAT.Core.Classes.DumpedClasses
         [RealName("vendorPanelVendorActiveSorting")]
         public int VendorPanelVendorActiveSorting { get; set; }
         
+        [RealName("comparisionTooltipDisabled")]
+        public bool ComparisionTooltipDisabled { get; set; }
+        
         [RealName("newItems")]
         public GameItemID[] NewItems { get; set; }
         
