@@ -19,8 +19,5 @@ namespace CyberCAT.Core.Classes.DumpedClasses
         
         [RealName("minigameBB")]
         public Handle<GameIBlackboard> MinigameBB { get; set; }
-		
-		[RealName("combatExitTimestamp")]        
-		public float CombatExitTimestamp { get; set; }
     }
 }
